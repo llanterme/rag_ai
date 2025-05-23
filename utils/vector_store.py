@@ -18,6 +18,7 @@ class PineconeStore:
         self.client = Pinecone(api_key=PINECONE_API_KEY)
         self.index_name = PINECONE_INDEX_NAME
         self.namespace = PINECONE_NAMESPACE
+        print(f"PineconeStore initialized with index_name='{self.index_name}', namespace='{self.namespace}'")
         self.ensure_index_exists()
         self.index = self.client.Index(self.index_name)
         
