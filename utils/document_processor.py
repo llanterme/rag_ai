@@ -3,8 +3,10 @@ import json
 import hashlib
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Set
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import PyPDF2
+from tqdm import tqdm
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 
@@ -39,19 +41,45 @@ def save_ingested_hashes(hashes: Set[str]):
         json.dump(list(hashes), f)
 
 def read_text_file(file_path: Path) -> str:
-    """Read content from a text file."""
-    with open(file_path, 'r', encoding='utf-8') as file:
-        return file.read()
+    """Read content from a text file in chunks to be memory efficient."""
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='replace') as file:
+            # Read and process in chunks
+            chunk_size = 1024 * 1024  # 1MB chunks
+            chunks = []
+            while True:
+                chunk = file.read(chunk_size)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return ''.join(chunks)
+    except Exception as e:
+        print(f"Error reading {file_path}: {str(e)}")
+        return ""
 
 def read_pdf_file(file_path: Path) -> str:
-    """Extract text from a PDF file."""
-    text = ""
-    with open(file_path, 'rb') as file:
-        pdf_reader = PyPDF2.PdfReader(file)
-        for page_num in range(len(pdf_reader.pages)):
-            page = pdf_reader.pages[page_num]
-            text += page.extract_text() + "\n\n"
-    return text
+    """Extract text from a PDF file with better error handling and progress feedback."""
+    try:
+        text_parts = []
+        with open(file_path, 'rb') as file:
+            pdf_reader = PyPDF2.PdfReader(file)
+            total_pages = len(pdf_reader.pages)
+            
+            # Process pages with progress bar
+            for page_num in tqdm(range(total_pages), desc=f"Processing {file_path.name}"):
+                try:
+                    page = pdf_reader.pages[page_num]
+                    text = page.extract_text()
+                    if text:
+                        text_parts.append(text + "\n\n")
+                except Exception as e:
+                    print(f"Error processing page {page_num + 1}: {str(e)}")
+                    continue
+                    
+        return ''.join(text_parts)
+    except Exception as e:
+        print(f"Error reading PDF {file_path}: {str(e)}")
+        return ""
 
 def chunk_text(text: str, source_id: str, filename: str) -> List[Chunk]:
     """Split text into chunks with metadata."""
@@ -75,21 +103,44 @@ def chunk_text(text: str, source_id: str, filename: str) -> List[Chunk]:
     return chunks
 
 def generate_embeddings(chunks: List[Chunk]) -> List[Chunk]:
-    """Generate embeddings for a list of chunks."""
+    """Generate embeddings for a list of chunks with better batching and error handling."""
     embeddings = OpenAIEmbeddings()
-    texts = [chunk.text for chunk in chunks]
+    total_chunks = len(chunks)
     
-    # Process in batches to avoid token limits
-    BATCH_SIZE = 50
-    for i in range(0, len(chunks), BATCH_SIZE):
-        batch = chunks[i:i+BATCH_SIZE]
-        batch_texts = [chunk.text for chunk in batch]
-        batch_embeddings = embeddings.embed_documents(batch_texts)
-        
-        for j, embedding in enumerate(batch_embeddings):
-            chunks[i+j].embedding = embedding
+    if total_chunks == 0:
+        return []
     
-    return chunks
+    # Process in parallel batches
+    BATCH_SIZE = 100  # Increased batch size for better throughput
+    NUM_WORKERS = 4   # Number of parallel workers
+    
+    def process_batch(batch_indices):
+        batch_chunks = [chunks[i] for i in batch_indices]
+        batch_texts = [chunk.text for chunk in batch_chunks]
+        try:
+            batch_embeddings = embeddings.embed_documents(batch_texts)
+            for i, embedding in zip(batch_indices, batch_embeddings):
+                chunks[i].embedding = embedding
+            return len(batch_indices)
+        except Exception as e:
+            print(f"Error generating embeddings: {str(e)}")
+            return 0
+    
+    # Create batches of indices
+    batch_indices = [range(i, min(i + BATCH_SIZE, total_chunks)) 
+                    for i in range(0, total_chunks, BATCH_SIZE)]
+    
+    # Process batches in parallel
+    completed = 0
+    with tqdm(total=total_chunks, desc="Generating embeddings") as pbar:
+        with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+            futures = [executor.submit(process_batch, batch) for batch in batch_indices]
+            for future in as_completed(futures):
+                completed += future.result() or 0
+                pbar.update(BATCH_SIZE)
+    
+    # Filter out any chunks that failed to get embeddings
+    return [chunk for chunk in chunks if chunk.embedding is not None]
 
 def process_file(file_path: Path) -> List[Chunk]:
     """Process a single file and return chunks with embeddings."""
