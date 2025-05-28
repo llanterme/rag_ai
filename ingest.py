@@ -1,10 +1,11 @@
+#!/usr/bin/env python3
 import os
 import argparse
+import sys
 from pathlib import Path
 from typing import List
 
-from utils.vector_store import PineconeStore
-from utils.document_processor import load_ingested_hashes
+from document_manager import add_documents
 
 def ingest_documents(directory_path: str = None, file_paths: List[str] = None) -> int:
     """
@@ -17,28 +18,24 @@ def ingest_documents(directory_path: str = None, file_paths: List[str] = None) -
     Returns:
         Number of new documents ingested
     """
-    store = PineconeStore()
-    
     # Collect files to process
     files_to_process = []
     
     if directory_path:
         dir_path = Path(directory_path)
         if not dir_path.exists() or not dir_path.is_dir():
-            raise ValueError(f"Directory does not exist: {directory_path}")
+            print(f"Error: Directory not found: {directory_path}")
+            return 0
         
-        # Find all PDF and TXT files in the directory
-        for ext in ['.pdf', '.txt']:
-            files_to_process.extend(list(dir_path.glob(f"**/*{ext}")))
+        # Add all PDF and text files from directory
+        files_to_process.extend(dir_path.glob("*.pdf"))
+        files_to_process.extend(dir_path.glob("*.txt"))
     
     if file_paths:
-        for file_path in file_paths:
-            path = Path(file_path)
+        for path_str in file_paths:
+            path = Path(path_str)
             if not path.exists():
-                print(f"Warning: File does not exist: {file_path}")
-                continue
-            if path.suffix.lower() not in ['.pdf', '.txt']:
-                print(f"Warning: Unsupported file type: {path.suffix}")
+                print(f"Warning: File not found: {path}")
                 continue
             files_to_process.append(path)
     
@@ -46,18 +43,9 @@ def ingest_documents(directory_path: str = None, file_paths: List[str] = None) -
         print("No files to process.")
         return 0
     
-    # Get already ingested files
-    ingested_hashes = load_ingested_hashes()
-    
-    # Ingest documents
-    num_ingested = store.ingest_documents(files_to_process)
-    
-    # Print summary
-    print(f"Processed {len(files_to_process)} files.")
-    print(f"Ingested {num_ingested} new documents.")
-    print(f"Total documents in knowledge base: {len(ingested_hashes) + num_ingested}")
-    
-    return num_ingested
+    # Use the document manager to add documents
+    add_documents(files_to_process)
+    return len(files_to_process)
 
 def main():
     parser = argparse.ArgumentParser(description="Ingest documents into Pinecone")
@@ -67,10 +55,14 @@ def main():
     
     args = parser.parse_args()
     
-    if args.dir:
-        ingest_documents(directory_path=args.dir)
-    elif args.files:
-        ingest_documents(file_paths=args.files)
+    try:
+        if args.dir:
+            ingest_documents(directory_path=args.dir)
+        elif args.files:
+            ingest_documents(file_paths=args.files)
+    except Exception as e:
+        print(f"Error: {str(e)}", file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

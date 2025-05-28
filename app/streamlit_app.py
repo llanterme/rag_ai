@@ -22,20 +22,34 @@ def display_message_part(part):
     """
     Display a single part of a message in the Streamlit UI.
     """
-    # User messages
-    if part.part_kind == 'user-prompt' and part.content:
-        with st.chat_message("user"):
-            st.markdown(part.content)
-    # AI messages
-    elif part.part_kind == 'text' and part.content:
-        with st.chat_message("assistant"):
-            st.markdown(part.content)
-    # Tool calls and returns for displaying source attribution
-    elif part.part_kind == 'tool-call' and part.tool_name == 'query_knowledge_base':
-        st.session_state.last_query = part.args.get('query', '')
-    elif part.part_kind == 'tool-return' and part.tool_name == 'query_knowledge_base':
-        if part.content:
-            st.session_state.last_sources = part.content
+    try:
+        # User messages
+        if part.part_kind == 'user-prompt' and part.content:
+            with st.chat_message("user"):
+                st.markdown(part.content)
+        # AI messages
+        elif part.part_kind == 'text' and part.content:
+            with st.chat_message("assistant"):
+                st.markdown(part.content)
+        # Tool calls and returns for displaying source attribution
+        elif part.part_kind == 'tool-call' and part.tool_name == 'query_knowledge_base':
+            # Safely get query from args, handling cases where args might be None or not a dict
+            query = ''
+            if hasattr(part, 'args') and part.args:
+                if isinstance(part.args, dict):
+                    query = part.args.get('query', '')
+                elif hasattr(part.args, 'get'):
+                    query = part.args.get('query', '')
+            st.session_state.last_query = query
+        elif part.part_kind == 'tool-return' and part.tool_name == 'query_knowledge_base':
+            if part.content:
+                st.session_state.last_sources = part.content
+    except Exception as e:
+        st.error(f"Error displaying message part: {str(e)}")
+        st.error(f"Part details: {part}")
+        if hasattr(part, 'args'):
+            st.error(f"Part args type: {type(part.args)}")
+            st.error(f"Part args: {part.args}")
     
 async def run_agent_with_streaming(user_input):
     """Run the agent with streaming response."""
@@ -60,15 +74,37 @@ async def run_agent_with_streaming(user_input):
 def display_sources():
     """Display source attribution for the last query."""
     if hasattr(st.session_state, 'last_sources') and st.session_state.last_sources:
-        with st.expander("View Sources", expanded=False):
-            sources = st.session_state.last_sources
-            if isinstance(sources, list):
-                for i, source in enumerate(sources):
-                    st.markdown(f"**Source {i+1}**: {source.get('metadata', {}).get('source', 'Unknown')}")
-                    st.markdown(f"**Relevance Score**: {source.get('metadata', {}).get('score', 'N/A'):.4f}")
-                    with st.expander("View Content", expanded=False):
-                        st.markdown(source.get('content', 'No content available'))
-                    st.divider()
+        sources = st.session_state.last_sources
+        if not isinstance(sources, list):
+            return
+            
+        st.markdown("### Sources")
+        
+        # Create tabs for each source
+        tabs = st.tabs([f"Source {i+1}" for i in range(len(sources))])
+        
+        for i, (tab, source) in enumerate(zip(tabs, sources)):
+            with tab:
+                # Display source metadata
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    st.markdown(f"**File**: {source.get('metadata', {}).get('source', 'Unknown')}")
+                with col2:
+                    st.markdown(f"**Relevance**: {source.get('metadata', {}).get('score', 'N/A'):.4f}")
+                
+                # Display content in a scrollable container
+                st.markdown("**Content:**")
+                content = source.get('content', 'No content available')
+                st.markdown(
+                    f'<div style="border: 1px solid #e0e0e0; border-radius: 0.5rem; '
+                    f'padding: 1rem; max-height: 300px; overflow-y: auto;">'
+                    f'{content}</div>',
+                    unsafe_allow_html=True
+                )
+                
+                # Add some spacing between sources
+                if i < len(sources) - 1:
+                    st.markdown("---")
 
 def handle_file_upload():
     """Handle file upload and ingestion."""
