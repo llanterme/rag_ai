@@ -1,0 +1,7 @@
+{
+  "12345": {
+    "index_name": "sandbox",
+    "document_chunks_file": "document_chunks_12345.json",
+    "ingested_files_file": "ingested_files_12345.json"
+  }
+}
